@@ -1,0 +1,15 @@
+# Arquivos de estudo preenchidos localmente. Eles não fazem parte do portfólio.
+learning-output/
+
+# Dependências e artefatos gerados
+node_modules/
+dist/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+!*.tfvars.example
+*.zip
+.env

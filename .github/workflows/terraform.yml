@@ -1,0 +1,277 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: websocket-runtime-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: sa-east-1
+  AWS_ACCOUNT_ID: '761018861028'
+  # Role OIDC global já existente: este projeto não cria provider, policy ou role.
+  AWS_ROLE_ARN: arn:aws:iam::761018861028:role/github-actions-deploy-role
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  validate:
+    name: Validate Terraform
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+
+      - name: Check formatting
+        working-directory: apps/infra
+        run: terraform fmt -check -recursive
+
+      - name: Initialize without remote backend
+        working-directory: apps/infra
+        run: terraform init -backend=false -input=false
+
+      - name: Validate configuration
+        working-directory: apps/infra
+        run: terraform validate
+
+  plan:
+    name: Plan Terraform
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') &&
+      github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      provision: ${{ steps.gate.outputs.provision }}
+      destroy: ${{ steps.gate.outputs.destroy }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/backend/package-lock.json
+
+      - name: Build Lambda artifact source
+        working-directory: apps/backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+
+      - name: Read lifecycle gates
+        id: gate
+        working-directory: apps/infra
+        run: |
+          set -euo pipefail
+          provision="$(sed -nE 's/^[[:space:]]*provision_infrastructure[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' locals.tf)"
+          destroy="$(sed -nE 's/^[[:space:]]*destroy_infrastructure[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' locals.tf)"
+          test "$provision" = "true" || test "$provision" = "false"
+          test "$destroy" = "true" || test "$destroy" = "false"
+          if [[ "$provision" == "true" && "$destroy" == "true" ]]; then
+            echo "provision_infrastructure and destroy_infrastructure cannot both be true."
+            exit 1
+          fi
+          echo "provision=$provision" >> "$GITHUB_OUTPUT"
+          echo "destroy=$destroy" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Terraform AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: websocket-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      - name: Initialize remote backend
+        working-directory: apps/infra
+        run: terraform init -input=false
+
+      - name: Create execution plan and Lambda ZIP
+        working-directory: apps/infra
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Write plan summary
+        working-directory: apps/infra
+        run: |
+          terraform show -json tfplan > tfplan.json
+          created="$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' tfplan.json)"
+          updated="$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' tfplan.json)"
+          deleted="$(jq '[.resource_changes[]? | select(.change.actions == ["delete"])] | length' tfplan.json)"
+          {
+            echo '### Terraform plan'
+            echo
+            echo "- Create: $created"
+            echo "- Update: $updated"
+            echo "- Delete: $deleted"
+            echo "- provision_infrastructure: \`${{ steps.gate.outputs.provision }}\`"
+            echo "- destroy_infrastructure: \`${{ steps.gate.outputs.destroy }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Deploy WebSocket infrastructure
+    if: >-
+      needs.plan.outputs.provision == 'true' &&
+      needs.plan.outputs.destroy != 'true'
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      # Necessário para criar a tag e a release somente após um deploy bem-sucedido.
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # A release calcula a próxima versão a partir das tags já publicadas.
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/backend/package-lock.json
+
+      - name: Build Lambda artifact source
+        working-directory: apps/backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+
+      - name: Configure Terraform AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: websocket-apply-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      - name: Initialize remote backend
+        working-directory: apps/infra
+        run: terraform init -input=false
+
+      - name: Deploy reviewed configuration and Lambda ZIP
+        working-directory: apps/infra
+        run: |
+          terraform plan -input=false -out=tfplan
+          terraform apply -input=false tfplan
+
+      - name: Write deployment summary
+        working-directory: apps/infra
+        run: |
+          {
+            echo '### WebSocket deployment'
+            echo
+            echo "- WebSocket URL: \`$(terraform output -raw websocket_url)\`"
+            echo "- API ID: \`$(terraform output -raw websocket_api_id)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create semantic version, tag, and GitHub release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYED_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+          if ! git tag --list | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # O primeiro deploy representa o MVP funcional. As versões
+            # seguintes serão calculadas a partir dos commits posteriores.
+            tag="v0.1.0"
+            gh release create "$tag" \
+              apps/infra/backend.zip#lambda-handlers.zip \
+              --target "$DEPLOYED_COMMIT" \
+              --title "WebSocket $tag" \
+              --generate-notes
+          fi
+
+          if [[ -z "${tag:-}" ]]; then
+            # semantic-release precisa estar em uma branch, e não em HEAD
+            # destacado, para validar que a publicação é feita a partir da main.
+            git switch --force-create main "$DEPLOYED_COMMIT"
+            npx --yes semantic-release@25
+            tag="$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n 1 || true)"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Add deployment references to release
+        if: steps.release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYED_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          short_commit="${DEPLOYED_COMMIT:0:7}"
+          artifact_sha256="$(sha256sum apps/infra/backend.zip | awk '{print $1}')"
+          websocket_url="$(terraform -chdir=apps/infra output -raw websocket_url)"
+          api_id="$(terraform -chdir=apps/infra output -raw websocket_api_id)"
+          gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.md
+
+          cat >> release-notes.md <<EOF
+
+
+          ## Deployment
+
+          | Reference | Value |
+          | --- | --- |
+          | Commit | [\`${short_commit}\`](${{ github.server_url }}/${{ github.repository }}/commit/${DEPLOYED_COMMIT}) |
+          | WebSocket URL | \`${websocket_url}\` |
+          | API Gateway ID | \`${api_id}\` |
+          | AWS region | \`${AWS_REGION}\` |
+          | Lambda runtime | \`nodejs22.x\` |
+          | Terraform | \`$(terraform version -json | jq -r '.terraform_version')\` |
+          | Lambda ZIP SHA-256 | \`${artifact_sha256}\` |
+          EOF
+
+          gh release edit "$RELEASE_TAG" --notes-file release-notes.md

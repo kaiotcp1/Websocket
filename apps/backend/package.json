@@ -1,0 +1,19 @@
+{
+  "name": "rock-paper-scissors-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc --project tsconfig.json && node -e \"require('node:fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"module\\\"}\\n')\"",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.152",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

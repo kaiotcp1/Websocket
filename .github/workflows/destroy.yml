@@ -1,0 +1,109 @@
+name: Destroy WebSocket runtime
+
+on:
+  workflow_run:
+    workflows: [Terraform]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: websocket-runtime-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: sa-east-1
+  AWS_ACCOUNT_ID: '761018861028'
+  AWS_ROLE_ARN: arn:aws:iam::761018861028:role/github-actions-deploy-role
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  destroy:
+    name: Destroy Terraform runtime
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Verify destroy gate
+        id: gate
+        working-directory: apps/infra
+        run: |
+          set -euo pipefail
+          provision="$(sed -nE 's/^[[:space:]]*provision_infrastructure[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' locals.tf)"
+          destroy="$(sed -nE 's/^[[:space:]]*destroy_infrastructure[[:space:]]*=[[:space:]]*(true|false)[[:space:]]*$/\1/p' locals.tf)"
+          test "$provision" = "true" || test "$provision" = "false"
+          test "$destroy" = "true" || test "$destroy" = "false"
+          if [[ "$provision" == "true" && "$destroy" == "true" ]]; then
+            echo "provision_infrastructure and destroy_infrastructure cannot both be true."
+            exit 1
+          fi
+          echo "enabled=$destroy" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js 22
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/backend/package-lock.json
+
+      - name: Build Lambda artifact source
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: apps/backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Terraform
+        if: steps.gate.outputs.enabled == 'true'
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.15.8
+
+      - name: Configure Terraform AWS credentials
+        if: steps.gate.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: websocket-destroy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+
+      - name: Initialize remote backend
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: apps/infra
+        run: terraform init -input=false
+
+      - name: Destroy runtime infrastructure
+        if: steps.gate.outputs.enabled == 'true'
+        working-directory: apps/infra
+        run: |
+          terraform plan -destroy -input=false -out=tfplan
+          terraform apply -input=false tfplan
+
+      - name: Write summary
+        run: |
+          {
+            echo '### WebSocket runtime destroy'
+            echo
+            if [[ '${{ steps.gate.outputs.enabled }}' == 'true' ]]; then
+              echo 'The WebSocket resources in websocket/dev/terraform.tfstate were destroyed.'
+            else
+              echo 'Destroy gate is disabled; no resources were changed.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
