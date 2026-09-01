@@ -9,6 +9,7 @@
     "sourceMap": true,
     "declaration": true,
     "verbatimModuleSyntax": true,
+    "types": ["node", "aws-lambda"],
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"]
