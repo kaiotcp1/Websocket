@@ -63,42 +63,19 @@ resource "aws_iam_role" "api_gateway_cloudwatch" {
   tags               = local.common_tags
 }
 
-data "aws_iam_policy_document" "api_gateway_logs" {
-  statement {
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:DescribeLogGroups",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogStream",
-      "logs:DescribeLogStreams",
-      "logs:PutLogEvents",
-      "logs:GetLogEvents",
-      "logs:FilterLogEvents",
-    ]
-    resources = [
-      "${aws_cloudwatch_log_group.api_access.arn}:*",
-      "${aws_cloudwatch_log_group.api_execution.arn}:*",
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "api_gateway_logs" {
-  name   = "${local.name_prefix}-api-gateway-logs"
-  role   = aws_iam_role.api_gateway_cloudwatch.id
-  policy = data.aws_iam_policy_document.api_gateway_logs.json
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch_logs" {
+  # O API Gateway valida esta policy de serviço ao configurar uma CloudWatch
+  # role em nível de conta. Ela é a policy gerenciada oficial da AWS para isso.
+  role       = aws_iam_role.api_gateway_cloudwatch.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
 }
 
 # API Gateway WebSocket usa esta configuração em nível de conta/região para
 # habilitar logs de execution em stages com logging_level definido.
 resource "aws_api_gateway_account" "websocket" {
   cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+
+  depends_on = [aws_iam_role_policy_attachment.api_gateway_cloudwatch_logs]
 }
 
 # A execution role diz o que a Lambda pode fazer. Estas permissões, por outro
