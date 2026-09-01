@@ -21,3 +21,8 @@ output "lambda_function_names" {
     default    = aws_lambda_function.default.function_name
   }
 }
+
+output "game_table_name" {
+  description = "Tabela DynamoDB que armazena salas e conexões ativas."
+  value       = aws_dynamodb_table.game.name
+}

@@ -42,6 +42,33 @@ resource "aws_iam_role_policy" "lambda_logs" {
   policy = data.aws_iam_policy_document.lambda_logs.json
 }
 
+# The game only reads and changes its own table and can post messages only to
+# connections created by this API Gateway stage. No broad AWS permissions are needed.
+data "aws_iam_policy_document" "lambda_game" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "dynamodb:DeleteItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+    ]
+    resources = [aws_dynamodb_table.game.arn]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["execute-api:ManageConnections"]
+    resources = ["${aws_apigatewayv2_api.websocket.execution_arn}/${var.environment}/POST/@connections/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_game" {
+  name   = "${local.name_prefix}-game"
+  role   = aws_iam_role.lambda_execution.id
+  policy = data.aws_iam_policy_document.lambda_game.json
+}
+
 data "aws_iam_policy_document" "api_gateway_assume_role" {
   statement {
     effect  = "Allow"

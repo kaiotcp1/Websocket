@@ -1,0 +1,4 @@
+@import "tailwindcss";
+
+@theme { --color-midnight: #09111f; --color-panel: #11243b; --color-sky: #4a90e2; --color-mint: #70c4a0; }
+body { min-width: 320px; min-height: 100vh; margin: 0; background: radial-gradient(circle at top, #173968, #09111f 55%); }

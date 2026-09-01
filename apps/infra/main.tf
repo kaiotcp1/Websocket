@@ -57,6 +57,32 @@ resource "aws_cloudwatch_log_group" "default" {
   tags              = local.common_tags
 }
 
+# DynamoDB on-demand has no provisioned capacity to pay for while the game is idle.
+# PK/SK hold rooms and connection-to-room lookups in the same small table.
+resource "aws_dynamodb_table" "game" {
+  name         = "${local.name_prefix}-game"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "PK"
+  range_key    = "SK"
+
+  attribute {
+    name = "PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "SK"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+
+  tags = local.common_tags
+}
+
 resource "aws_lambda_function" "connect" {
   function_name    = "${local.name_prefix}-connect"
   description      = "Handles API Gateway WebSocket $connect events."
@@ -80,6 +106,12 @@ resource "aws_lambda_function" "disconnect" {
   filename         = data.archive_file.backend.output_path
   source_code_hash = data.archive_file.backend.output_base64sha256
 
+  environment {
+    variables = {
+      GAME_TABLE_NAME = aws_dynamodb_table.game.name
+    }
+  }
+
   tags = local.common_tags
 
   depends_on = [aws_cloudwatch_log_group.disconnect]
@@ -93,6 +125,12 @@ resource "aws_lambda_function" "default" {
   handler          = "handlers/default.handler"
   filename         = data.archive_file.backend.output_path
   source_code_hash = data.archive_file.backend.output_base64sha256
+
+  environment {
+    variables = {
+      GAME_TABLE_NAME = aws_dynamodb_table.game.name
+    }
+  }
 
   tags = local.common_tags
 
