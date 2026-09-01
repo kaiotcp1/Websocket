@@ -4,6 +4,9 @@ learning-output/
 # Dependências e artefatos gerados
 node_modules/
 dist/
+.vite/
+coverage/
+*.log
 .terraform/
 *.tfstate
 *.tfstate.*
@@ -13,3 +16,4 @@ tfplan
 !*.tfvars.example
 *.zip
 .env
+.codex/
