@@ -184,6 +184,10 @@ resource "aws_apigatewayv2_stage" "websocket" {
   default_route_settings {
     logging_level      = "INFO"
     data_trace_enabled = false
+    # Valores explícitos evitam que o stage receba limite zero, o que faria
+    # qualquer tentativa de $connect falhar com HTTP 429.
+    throttling_burst_limit = 100
+    throttling_rate_limit  = 50
   }
 
   tags = local.common_tags
