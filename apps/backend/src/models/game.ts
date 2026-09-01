@@ -1,6 +1,8 @@
 export type Choice = 'rock' | 'paper' | 'scissors';
 export type RoomStatus = 'waiting' | 'active' | 'finished' | 'abandoned';
 export type PlayerPosition = 'playerOne' | 'playerTwo';
+export type HandLandmark = readonly [number, number, number];
+export type Handedness = 'Left' | 'Right';
 
 export interface Room {
   code: string;

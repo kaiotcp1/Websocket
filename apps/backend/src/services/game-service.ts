@@ -1,6 +1,6 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
-import { createRoom, decideWinner, hasBothChoices, playerPosition, type Choice, type Connection } from '../models/game.js';
+import { createRoom, decideWinner, hasBothChoices, playerPosition, type Choice, type Connection, type Handedness, type HandLandmark } from '../models/game.js';
 import { GameRepository } from '../repositories/game-repository.js';
 import { WebSocketMessenger } from './websocket-messenger.js';
 
@@ -100,6 +100,23 @@ export class GameService {
     await this.repository.abandonRoom(room.code, new Date().toISOString());
     const updatedRoom = await this.repository.findRoom(room.code);
     if (updatedRoom) await this.messenger.broadcastRoom(event, updatedRoom);
+  }
+
+  async shareHandMotion(
+    event: APIGatewayProxyWebsocketEventV2,
+    landmarks: HandLandmark[],
+    worldLandmarks?: HandLandmark[],
+    handedness?: Handedness,
+  ): Promise<void> {
+    const connectionId = event.requestContext.connectionId;
+    const connection = await this.repository.findConnection(connectionId);
+    if (!connection) return;
+
+    const room = await this.repository.findRoom(connection.roomCode);
+    if (!room || room.status !== 'active') return;
+
+    const opponentId = room.playerOne === connectionId ? room.playerTwo : room.playerOne;
+    if (opponentId) await this.messenger.sendHandMotion(event, opponentId, landmarks, worldLandmarks, handedness);
   }
 
   async sendError(event: APIGatewayProxyWebsocketEventV2, message: string): Promise<void> {

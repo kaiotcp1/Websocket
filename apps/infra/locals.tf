@@ -3,6 +3,6 @@ locals {
   # recursos Terraform, então um plano local continua representando a infra.
   # Para criar/atualizar: provision=true e destroy=false.
   # Para remover: provision=false e destroy=true.
-  provision_infrastructure = true
-  destroy_infrastructure   = false
+  provision_infrastructure = false
+  destroy_infrastructure   = true
 }

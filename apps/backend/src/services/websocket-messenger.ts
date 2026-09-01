@@ -1,6 +1,6 @@
 import { ApiGatewayManagementApiClient, GoneException, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
-import { playerPosition, type Room } from '../models/game.js';
+import { playerPosition, type Handedness, type HandLandmark, type Room } from '../models/game.js';
 
 /** Sends view models back to clients through API Gateway's @connections API. */
 export class WebSocketMessenger {
@@ -23,6 +23,16 @@ export class WebSocketMessenger {
 
   async sendError(event: APIGatewayProxyWebsocketEventV2, message: string): Promise<void> {
     await this.send(event, event.requestContext.connectionId, { type: 'error', message });
+  }
+
+  async sendHandMotion(
+    event: APIGatewayProxyWebsocketEventV2,
+    connectionId: string,
+    landmarks: HandLandmark[],
+    worldLandmarks?: HandLandmark[],
+    handedness?: Handedness,
+  ): Promise<void> {
+    await this.send(event, connectionId, { type: 'handMotion', landmarks, worldLandmarks, handedness });
   }
 
   async broadcastRoom(event: APIGatewayProxyWebsocketEventV2, room: Room): Promise<void> {

@@ -1,13 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useHandTracking } from './hooks/useHandTracking.js';
 
 const ChoiceScene = lazy(() => import('./components/ChoiceScene.jsx'));
 
 const defaultUrl = 'wss://vwiohnml18.execute-api.us-east-1.amazonaws.com/dev';
-const choices = [
-  { value: 'rock', label: 'Pedra' },
-  { value: 'paper', label: 'Papel' },
-  { value: 'scissors', label: 'Tesoura' },
-];
 const labels = { rock: 'Pedra', paper: 'Papel', scissors: 'Tesoura' };
 
 export default function App() {
@@ -16,8 +12,12 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [roomCode, setRoomCode] = useState('');
   const [room, setRoom] = useState();
-  const [selectedChoice, setSelectedChoice] = useState();
+  const remoteHandRef = useRef();
   const [feedback, setFeedback] = useState('');
+
+  const handTracking = useHandTracking(({ screenLandmarks, worldLandmarks, handedness }) => {
+    if (room?.status === 'active') send({ action: 'handMotion', landmarks: screenLandmarks, worldLandmarks, handedness });
+  });
 
   useEffect(() => () => socketRef.current?.close(), []);
 
@@ -41,7 +41,7 @@ export default function App() {
 
     localStorage.setItem('websocket-url', url);
     setRoom(undefined);
-    setSelectedChoice(undefined);
+    remoteHandRef.current = undefined;
     setFeedback('Conectando…');
     const socket = new WebSocket(url);
     socketRef.current = socket;
@@ -54,25 +54,41 @@ export default function App() {
       if (message.type === 'roomState') {
         setFeedback('');
         setRoom(message.room);
-        if (message.room.status === 'finished') setSelectedChoice(message.room.yourChoice);
+      }
+      if (message.type === 'handMotion') {
+        remoteHandRef.current = {
+          screenLandmarks: message.landmarks,
+          // Compatibility with the deployed backend while it is still on the
+          // previous protocol: screen points remain a usable fallback.
+          worldLandmarks: message.worldLandmarks ?? message.landmarks,
+          handedness: message.handedness,
+        };
       }
     });
   }
 
   function choose(choice) {
-    // Keeping the local selection lets the 3D view react immediately while the
-    // backend keeps the opponent's choice private until the round is finished.
-    setSelectedChoice(choice);
     send({ action: 'play', choice });
   }
 
   const canPlay = room?.status === 'active' && !room.youHavePlayed;
-  const yourChoice = room?.status === 'finished' ? room.yourChoice : selectedChoice;
+  const yourChoice = room?.status === 'finished' ? room.yourChoice : undefined;
   const opponentChoice = room?.status === 'finished' ? room.opponentChoice : undefined;
+
+  useEffect(() => {
+    if (!canPlay || !handTracking.gesture) return undefined;
+
+    // Requiring a short stable pose avoids submitting a transient gesture while
+    // the player is still positioning the hand in front of the camera.
+    setFeedback(`Gesto ${labels[handTracking.gesture]} reconhecido. Mantendo para jogar…`);
+    const timer = window.setTimeout(() => choose(handTracking.gesture), 850);
+    return () => window.clearTimeout(timer);
+  }, [canPlay, handTracking.gesture]);
+
   const gameStatus = room?.status === 'waiting'
     ? 'Compartilhe o código e aguarde o segundo jogador.'
     : room?.status === 'active'
-      ? room.youHavePlayed ? 'Sua escolha está guardada. Aguardando oponente…' : 'Escolha pedra, papel ou tesoura.'
+      ? room.youHavePlayed ? 'Seu gesto está guardado. Aguardando oponente…' : 'Mostre pedra, papel ou tesoura para a webcam.'
       : room?.status === 'abandoned'
         ? 'O outro jogador desconectou. Crie uma nova sala para recomeçar.'
         : room?.status === 'finished'
@@ -86,7 +102,7 @@ export default function App() {
 
   return (
     <main className="grid min-h-screen place-items-center bg-steam-deep p-6 font-sans text-slate-100">
-      <div className="steam-card w-full max-w-2xl rounded-2xl border border-steam-blue/25 p-6 shadow-2xl shadow-black/55 backdrop-blur sm:p-8">
+      <div className="steam-card w-full max-w-4xl rounded-2xl border border-steam-blue/25 p-6 shadow-2xl shadow-black/55 backdrop-blur sm:p-8">
         <header className="mb-6 text-center">
           <p className="text-xs font-bold tracking-[0.15em] text-steam-blue">WEBSOCKET · API GATEWAY · LAMBDA · DYNAMODB</p>
           <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Pedra, Papel e Tesoura</h1>
@@ -119,16 +135,23 @@ export default function App() {
           <p className="text-steam-blue">Sala <strong className="font-mono tracking-widest">{room.code}</strong></p>
           <p className="mt-3 min-h-6 text-slate-200">{gameStatus}</p>
           <div className="mt-4">
-            <Suspense fallback={<div className="grid h-72 place-items-center rounded-xl border border-steam-blue/25 bg-steam-deep/80 text-steam-blue">Carregando arena 3D…</div>}>
-              <ChoiceScene yourChoice={yourChoice} opponentChoice={opponentChoice} winner={room.winner} youAre={room.youAre} />
+            <Suspense fallback={<div className="grid h-[26rem] place-items-center rounded-xl border border-steam-blue/25 bg-steam-deep/80 text-steam-blue sm:h-[30rem]">Carregando arena 3D…</div>}>
+              <ChoiceScene localHandRef={handTracking.landmarksRef} remoteHandRef={remoteHandRef} result={result} />
             </Suspense>
           </div>
+          <section className="mt-3 rounded-sm border border-steam-blue/20 bg-steam-deep/55 p-3 text-left">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><p className="text-sm font-black text-steam-blue">Mão pela webcam</p><p className="text-xs text-slate-300">O vídeo permanece neste dispositivo; apenas pontos da mão são enviados ao oponente.</p></div>
+              <button className="steam-button rounded-sm bg-steam-surface px-3 py-2 text-sm font-bold text-slate-100" onClick={handTracking.enabled ? handTracking.stopTracking : handTracking.startTracking}>
+                {handTracking.enabled ? 'Desativar câmera' : 'Ativar câmera'}
+              </button>
+            </div>
+            <div className={`mt-3 items-center gap-3 ${handTracking.enabled ? 'flex' : 'hidden'}`}><video ref={handTracking.videoRef} className="h-20 w-28 rounded-sm border border-steam-blue/25 object-cover [-webkit-transform:scaleX(-1)]" muted playsInline /><p className="text-sm text-slate-200">Gesto detectado: <strong className="text-steam-green-light">{handTracking.gesture ? labels[handTracking.gesture] : 'posicione a mão'}</strong></p></div>
+            {handTracking.error && <p className="mt-2 text-sm text-red-300">{handTracking.error}</p>}
+          </section>
           <div className="mt-3 grid grid-cols-2 gap-2 text-left text-sm">
-            <ChoiceFeedback title="Você" choice={yourChoice} revealed />
+            <ChoiceFeedback title="Você" choice={yourChoice} revealed={room.status === 'finished'} pending={handTracking.gesture ? `Gesto: ${labels[handTracking.gesture]}` : 'Posicione a mão'} />
             <ChoiceFeedback title="Oponente" choice={opponentChoice} revealed={room.status === 'finished'} />
-          </div>
-          <div className="mt-5 grid grid-cols-3 gap-2 sm:gap-3">
-            {choices.map((choice) => <button key={choice.value} disabled={!canPlay} onClick={() => choose(choice.value)} className={`steam-button min-h-16 rounded-sm border p-2 font-extrabold disabled:cursor-not-allowed disabled:opacity-40 ${selectedChoice === choice.value ? 'border-steam-blue bg-steam-blue text-steam-deep shadow-lg shadow-steam-blue/25' : 'border-steam-blue/25 bg-steam-surface text-slate-100 hover:bg-steam-blue hover:text-steam-deep'}`}>{choice.label}</button>)}
           </div>
           <p className={`mt-4 min-h-6 text-xl font-black text-steam-blue ${result ? 'result-reveal' : ''}`}>{result}</p>
         </section>}
@@ -139,9 +162,9 @@ export default function App() {
   );
 }
 
-function ChoiceFeedback({ title, choice, revealed }) {
+function ChoiceFeedback({ title, choice, revealed, pending = 'Aguardando…' }) {
   return <div className="rounded-sm border border-steam-blue/20 bg-steam-deep/55 p-3 transition-colors duration-300 hover:border-steam-blue/45">
     <p className="text-xs font-bold tracking-wider text-steam-blue">{title.toUpperCase()}</p>
-    <p className="mt-1 font-black text-slate-100">{revealed && choice ? labels[choice] : 'Aguardando…'}</p>
+    <p className="mt-1 font-black text-slate-100">{revealed && choice ? labels[choice] : pending}</p>
   </div>;
 }
