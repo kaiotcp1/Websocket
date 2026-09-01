@@ -8,7 +8,7 @@
   },
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && esbuild src/handlers/*.ts --bundle --platform=node --target=node22 --format=esm --outdir=dist/handlers && node -e \"require('node:fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"module\\\"}\\n')\"",
+    "build": "npm run clean && esbuild src/handlers/*.ts --bundle --platform=node --target=node22 --format=cjs --outdir=dist/handlers",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
