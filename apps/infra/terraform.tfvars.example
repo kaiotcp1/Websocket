@@ -1,7 +1,7 @@
 # Copie este arquivo para terraform.tfvars e altere somente o que precisar.
 # Credenciais AWS não pertencem a este arquivo: use AWS CLI, profile ou variáveis
 # de ambiente configuradas na sua máquina.
-aws_region         = "sa-east-1"
+aws_region         = "us-east-1"
 environment        = "dev"
 project_name       = "rock-paper-scissors"
 log_retention_days = 7

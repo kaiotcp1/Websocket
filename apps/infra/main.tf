@@ -31,6 +31,14 @@ resource "aws_cloudwatch_log_group" "api_access" {
   tags              = local.common_tags
 }
 
+# Logs de execução são separados dos access logs para facilitar a correlação
+# entre a route selecionada pelo API Gateway e o log da Lambda correspondente.
+resource "aws_cloudwatch_log_group" "api_execution" {
+  name              = "API-Gateway-Execution-Logs_${aws_apigatewayv2_api.websocket.id}/${var.environment}"
+  retention_in_days = var.log_retention_days
+  tags              = local.common_tags
+}
+
 resource "aws_cloudwatch_log_group" "connect" {
   name              = "/aws/lambda/${local.name_prefix}-connect"
   retention_in_days = var.log_retention_days
@@ -179,4 +187,6 @@ resource "aws_apigatewayv2_stage" "websocket" {
   }
 
   tags = local.common_tags
+
+  depends_on = [aws_api_gateway_account.websocket]
 }

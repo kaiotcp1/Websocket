@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "Região AWS onde os recursos da aplicação serão criados."
   type        = string
-  default     = "sa-east-1"
+  default     = "us-east-1"
 }
 
 variable "environment" {

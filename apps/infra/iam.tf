@@ -42,6 +42,65 @@ resource "aws_iam_role_policy" "lambda_logs" {
   policy = data.aws_iam_policy_document.lambda_logs.json
 }
 
+data "aws_iam_policy_document" "api_gateway_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["apigateway.amazonaws.com"]
+    }
+  }
+}
+
+# Esta role é usada pelo API Gateway para publicar execution logs no CloudWatch.
+# Ela é diferente da role de execução das Lambdas, pois são serviços distintos.
+resource "aws_iam_role" "api_gateway_cloudwatch" {
+  name               = "${local.name_prefix}-api-gateway-cloudwatch"
+  path               = "/github-actions-passable/"
+  assume_role_policy = data.aws_iam_policy_document.api_gateway_assume_role.json
+  tags               = local.common_tags
+}
+
+data "aws_iam_policy_document" "api_gateway_logs" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:DescribeLogGroups",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+      "logs:GetLogEvents",
+      "logs:FilterLogEvents",
+    ]
+    resources = [
+      "${aws_cloudwatch_log_group.api_access.arn}:*",
+      "${aws_cloudwatch_log_group.api_execution.arn}:*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "api_gateway_logs" {
+  name   = "${local.name_prefix}-api-gateway-logs"
+  role   = aws_iam_role.api_gateway_cloudwatch.id
+  policy = data.aws_iam_policy_document.api_gateway_logs.json
+}
+
+# API Gateway WebSocket usa esta configuração em nível de conta/região para
+# habilitar logs de execution em stages com logging_level definido.
+resource "aws_api_gateway_account" "websocket" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch.arn
+}
+
 # A execution role diz o que a Lambda pode fazer. Estas permissões, por outro
 # lado, dizem quem pode invocar cada função: somente esta API, stage e route.
 resource "aws_lambda_permission" "connect" {

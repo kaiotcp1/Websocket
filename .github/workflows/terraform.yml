@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: sa-east-1
+  AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: '761018861028'
   # Role OIDC global já existente: este projeto não cria provider, policy ou role.
   AWS_ROLE_ARN: arn:aws:iam::761018861028:role/github-actions-deploy-role
