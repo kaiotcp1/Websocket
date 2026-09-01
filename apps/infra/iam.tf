@@ -12,6 +12,9 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 
 resource "aws_iam_role" "lambda_execution" {
   name               = "${local.name_prefix}-lambda-execution"
+  # O path é o contrato com a role OIDC de CI/CD: somente roles de runtime
+  # aprovadas neste namespace podem ser passadas para serviços AWS.
+  path               = "/github-actions-passable/"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
   tags               = local.common_tags
 }
